@@ -9,8 +9,8 @@
 const gfx::open_font& text_font = OpenSans_Regular;
 using namespace gfx;
 using namespace arduino;
-static constexpr const char* wifi_ssid = "my_ssid";
-static constexpr const char* wifi_pass = "my_pass";
+static constexpr const char* wifi_ssid = "Communism_Will_Win";
+static constexpr const char* wifi_pass = "mypalkarl";
 static wifi_manager wifi_man;
 static constexpr const uint32_t wifi_fetch_timeout = 30;
 
@@ -44,6 +44,9 @@ static const char* get_str(const char* list,int index) {
 }
 static bool update_time_buffer(time_t now) {
     tm* t = localtime(&now);
+    char sz[32];
+    strftime(sz,sizeof(sz),"%x %X",t);
+    puts(sz);
     static int old_hour = -1;
     static int old_i = -1;
     int hour = t->tm_hour;
@@ -70,8 +73,6 @@ static bool update_time_buffer(time_t now) {
     return result;
 }
 void draw_time() {
-    puts(time_buffer1);
-    puts(time_buffer2);
     epd.suspend();
     epd.clear(epd.bounds());
     oti.text = time_buffer1;
