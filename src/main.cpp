@@ -49,7 +49,7 @@ static bool update_time_buffer(time_t now) {
     int hour = t->tm_hour;
     int min = t->tm_min;
     int adj = 0;
-    int i = min/5;
+    int i = (int)roundf(((float)min)/5.0f);
     if(i>6) {
         adj = 1;
     }
