@@ -9,8 +9,8 @@
 const gfx::open_font& text_font = OpenSans_Regular;
 using namespace gfx;
 using namespace arduino;
-static constexpr const char* wifi_ssid = "Communism_Will_Win";
-static constexpr const char* wifi_pass = "mypalkarl";
+static constexpr const char* wifi_ssid = "my_ssid";
+static constexpr const char* wifi_pass = "my_pass";
 static wifi_manager wifi_man;
 static constexpr const uint32_t wifi_fetch_timeout = 30;
 
