@@ -121,110 +121,115 @@ void draw_task(void* arg)
         }
     }
 }
+void update_task(void* arg)
+{
+    while(1) {
+        ///////////////////////////////////
+        // manage connection and fetching
+        ///////////////////////////////////
+        static uint32_t connection_refresh_ts = 0;
+        static uint32_t time_ts = 0;
+        switch (connection_state)
+        {
+        case CS_IDLE:
+            if (connection_refresh_ts == 0 || millis() > (connection_refresh_ts + (time_refresh_interval * 1000)))
+            {
+                connection_refresh_ts = millis();
+                connection_state = CS_CONNECTING;
+            }
+            break;
+        case CS_CONNECTING:
+            time_ts = 0;
+
+            if (wifi_man.state() != wifi_manager_state::connected && wifi_man.state() != wifi_manager_state::connecting)
+            {
+                puts("Connecting to network...");
+                wifi_man.connect(wifi_ssid, wifi_pass);
+                connection_state = CS_CONNECTED;
+            }
+            else if (wifi_man.state() == wifi_manager_state::connected)
+            {
+                connection_state = CS_CONNECTED;
+            }
+            break;
+        case CS_CONNECTED:
+            if (wifi_man.state() == wifi_manager_state::connected)
+            {
+                puts("Connected.");
+                connection_state = CS_FETCHING;
+            }
+            else
+            {
+                connection_refresh_ts = 0; // immediately try to connect again
+                connection_state = CS_IDLE;
+            }
+            break;
+        case CS_FETCHING:
+            puts("Retrieving time info...");
+            connection_refresh_ts = millis();
+            // grabs the timezone and tz offset based on IP
+            ip_loc::fetch(nullptr, nullptr, &time_offset, nullptr, 0, nullptr, 0, nullptr, 0);
+            connection_state = CS_POLLING;
+            time_ts = millis(); // we're going to correct for latency
+            time_server.begin_request();
+            break;
+        case CS_POLLING:
+            if (time_server.request_received())
+            {
+                const int latency_offset = (millis() - time_ts) / 1000;
+                time_now = (time_t)(time_server.request_result() + time_offset + latency_offset);
+                puts("Clock set.");
+                // set the digital clock - otherwise it only updates once a minute
+                time_data_t data;
+                update_time_buffer(time_now,&data);
+                puts("outgoing post");
+                xQueueSend(draw_queue,&data,portMAX_DELAY);
+            
+                connection_state = CS_IDLE;
+                puts("Turning WiFi off.");
+                wifi_man.disconnect(true);
+            }
+            else if (millis() > time_ts + (wifi_fetch_timeout * 1000))
+            {
+                puts("Retrieval timed out. Retrying.");
+                connection_state = CS_FETCHING;
+            }
+            break;
+        }
+        ///////////////////
+        // Track time
+        //////////////////
+        static uint32_t loop_time_ts=0;
+        static uint32_t loop_ts = millis();
+        static time_t old_now = 0;
+        if(old_now%300 != time_now%300) {
+            time_data_t data;
+            if (update_time_buffer(time_now,&data))
+            {
+                puts("outgoing post");
+                xQueueSend(draw_queue,&data,portMAX_DELAY);
+            }
+        }
+        uint32_t end_time_ts = millis();
+        old_now = time_now;
+        loop_time_ts += end_time_ts-loop_ts;
+        while(loop_time_ts>=1000) {
+            loop_time_ts-=1000;
+            ++time_now;
+        }
+        loop_ts = millis();
+        time_server.update();
+        vTaskDelay(1);
+    }
+}
 void setup()
 {
     Serial.begin(115200);
     draw_queue = xQueueCreate(10,sizeof(time_data_t));
     TaskHandle_t task_handle;
-
     xTaskCreate(draw_task,"draw_task",4096,nullptr,1,&task_handle);
+    xTaskCreate(update_task,"update_task",4096,nullptr,25,&task_handle);
 }
+void loop() {
 
-void loop()
-{
-    ///////////////////////////////////
-    // manage connection and fetching
-    ///////////////////////////////////
-    static uint32_t connection_refresh_ts = 0;
-    static uint32_t time_ts = 0;
-    switch (connection_state)
-    {
-    case CS_IDLE:
-        if (connection_refresh_ts == 0 || millis() > (connection_refresh_ts + (time_refresh_interval * 1000)))
-        {
-            connection_refresh_ts = millis();
-            connection_state = CS_CONNECTING;
-        }
-        break;
-    case CS_CONNECTING:
-        time_ts = 0;
-
-        if (wifi_man.state() != wifi_manager_state::connected && wifi_man.state() != wifi_manager_state::connecting)
-        {
-            puts("Connecting to network...");
-            wifi_man.connect(wifi_ssid, wifi_pass);
-            connection_state = CS_CONNECTED;
-        }
-        else if (wifi_man.state() == wifi_manager_state::connected)
-        {
-            connection_state = CS_CONNECTED;
-        }
-        break;
-    case CS_CONNECTED:
-        if (wifi_man.state() == wifi_manager_state::connected)
-        {
-            puts("Connected.");
-            connection_state = CS_FETCHING;
-        }
-        else
-        {
-            connection_refresh_ts = 0; // immediately try to connect again
-            connection_state = CS_IDLE;
-        }
-        break;
-    case CS_FETCHING:
-        puts("Retrieving time info...");
-        connection_refresh_ts = millis();
-        // grabs the timezone and tz offset based on IP
-        ip_loc::fetch(nullptr, nullptr, &time_offset, nullptr, 0, nullptr, 0, nullptr, 0);
-        connection_state = CS_POLLING;
-        time_ts = millis(); // we're going to correct for latency
-        time_server.begin_request();
-        break;
-    case CS_POLLING:
-        if (time_server.request_received())
-        {
-            const int latency_offset = (millis() - time_ts) / 1000;
-            time_now = (time_t)(time_server.request_result() + time_offset + latency_offset);
-            puts("Clock set.");
-            // set the digital clock - otherwise it only updates once a minute
-            time_data_t data;
-            update_time_buffer(time_now,&data);
-            puts("outgoing post");
-            xQueueSend(draw_queue,&data,portMAX_DELAY);
-        
-            connection_state = CS_IDLE;
-            puts("Turning WiFi off.");
-            wifi_man.disconnect(true);
-        }
-        else if (millis() > time_ts + (wifi_fetch_timeout * 1000))
-        {
-            puts("Retrieval timed out. Retrying.");
-            connection_state = CS_FETCHING;
-        }
-        break;
-    }
-    ///////////////////
-    // Track time
-    //////////////////
-    static uint32_t loop_time_ts=0;
-    static uint32_t loop_ts = millis();
-    static time_t old_now = 0;
-    if(old_now%300 != time_now%300) {
-        time_data_t data;
-        if (update_time_buffer(time_now,&data))
-        {
-            puts("outgoing post");
-            xQueueSend(draw_queue,&data,portMAX_DELAY);
-        }
-    }
-    uint32_t end_time_ts = millis();
-    old_now = time_now;
-    loop_time_ts += end_time_ts-loop_ts;
-    while(loop_time_ts>=1000) {
-        loop_time_ts-=1000;
-        ++time_now;
-    }
-    loop_ts = millis();
-    time_server.update();
 }
