@@ -47,7 +47,7 @@ static const char *get_str(const char *list, int index)
 }
 static bool update_time_buffer(time_t now)
 {
-    tm *t = localtime(&now);
+    tm *t = gmtime(&now);
     char sz[32];
     strftime(sz, sizeof(sz), "%x %X", t);
     puts(sz);
@@ -175,7 +175,6 @@ void loop()
             connection_state = CS_IDLE;
             puts("Turning WiFi off.");
             wifi_man.disconnect(true);
-            // wifi_icon.invalidate();
         }
         else if (millis() > time_ts + (wifi_fetch_timeout * 1000))
         {
@@ -187,16 +186,22 @@ void loop()
     ///////////////////
     // Track time
     //////////////////
-    static uint32_t tick_ts = millis();
-    if (millis() >= tick_ts + 1000)
-    {
-        tick_ts = millis();
-
-        ++time_now;
+    static uint32_t loop_time_ts=0;
+    static uint32_t loop_ts = millis();
+    static time_t old_now = 0;
+    if(old_now%300 != time_now%300) {
         if (update_time_buffer(time_now))
         {
             draw_time();
         }
     }
+    uint32_t end_time_ts = millis();
+    old_now = time_now;
+    loop_time_ts += end_time_ts-loop_ts;
+    while(loop_time_ts>=1000) {
+        loop_time_ts-=1000;
+        ++time_now;
+    }
+    loop_ts = millis();
     time_server.update();
 }
