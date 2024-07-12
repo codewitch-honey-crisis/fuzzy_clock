@@ -1,4 +1,7 @@
 #include <Arduino.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <freertos/queue.h>
 #include <wifi_manager.hpp>
 #include <ip_loc.hpp>
 #include <ntp_time.hpp>
@@ -25,7 +28,11 @@ static constexpr const uint32_t time_refresh_interval = 10 * 60;
 static constexpr const char *time_minutes = "\0five past\0ten past\0quarter past\0twenty past\0twenty-five past\0half past\0twenty-five 'til\0twenty 'til\0quarter 'til\0ten 'til\0five 'til";
 static constexpr const char *time_hours = "twelve\0one\0two\0three\0four\0five\0six\0seven\0eight\0nine\0ten\0eleven\0noon\0one\0two\0three\0four\0five\0six\0seven\0eight\0nine\0ten\0eleven";
 static constexpr const char *time_oclock = "o'clock";
-
+typedef struct {
+    char line1[64];
+    char line2[64];
+} time_data_t;
+QueueHandle_t draw_queue = nullptr;
 typedef enum
 {
     CS_IDLE = 0,
@@ -45,9 +52,9 @@ static const char *get_str(const char *list, int index)
     }
     return result;
 }
-static bool update_time_buffer(time_t now)
+static bool update_time_buffer(time_t now,time_data_t* out_data)
 {
-    tm *t = gmtime(&now);
+    tm *t = localtime(&now);
     char sz[32];
     strftime(sz, sizeof(sz), "%x %X", t);
     puts(sz);
@@ -64,42 +71,28 @@ static bool update_time_buffer(time_t now)
     }
     if (i == 0)
     {
-        strcpy(time_buffer1, get_str(time_hours, hour % 24));
+        strcpy(out_data->line1, get_str(time_hours, hour % 24));
         if (hour == 11)
         {
-            time_buffer2[0] = '\0';
+            out_data->line2[0] = '\0';
         }
         else
         {
-            strcpy(time_buffer2, time_oclock);
+            strcpy(out_data->line2, time_oclock);
         }
     }
     else
     {
-        strcpy(time_buffer1, get_str(time_minutes, i % 12));
-        strcpy(time_buffer2, get_str(time_hours, (hour + adj) % 24));
+        strcpy(out_data->line1, get_str(time_minutes, i % 12));
+        strcpy(out_data->line2, get_str(time_hours, (hour + adj) % 24));
     }
     bool result = old_hour != hour || old_i != i;
     old_hour = hour;
     old_i = i;
     return result;
 }
-void draw_time()
+void draw_task(void* arg)
 {
-    epd.suspend();
-    epd.clear(epd.bounds());
-    oti.text = time_buffer1;
-    oti.scale = oti.font->scale(epd.dimensions().height / 4);
-    srect16 txt_rect = oti.font->measure_text(ssize16::max(), oti.offset, oti.text, oti.scale, oti.scaled_tab_width, oti.encoding, oti.cache).bounds();
-    draw::text(epd, txt_rect.center((srect16)epd.bounds()).offset(0, 0 - txt_rect.dimensions().height / 2 - 1), oti, color_t::black);
-    oti.text = time_buffer2;
-    txt_rect = oti.font->measure_text(ssize16::max(), oti.offset, oti.text, oti.scale, oti.scaled_tab_width, oti.encoding, oti.cache).bounds();
-    draw::text(epd, txt_rect.center((srect16)epd.bounds()).offset(0, txt_rect.dimensions().height / 2 + 1), oti, color_t::black);
-    epd.resume();
-}
-void setup()
-{
-    Serial.begin(115200);
     epd.initialize();
     epd.rotation(3);
     oti.font = &text_font;
@@ -110,6 +103,31 @@ void setup()
     srect16 txt_rect = oti.font->measure_text(ssize16::max(), oti.offset, oti.text, oti.scale, oti.scaled_tab_width, oti.encoding, oti.cache).bounds();
     draw::text(epd, txt_rect.center((srect16)epd.bounds()), oti, color_t::black);
     epd.resume();
+    
+    while(1) {
+        time_data_t data;
+        if(pdTRUE==xQueueReceive(draw_queue,&data,portMAX_DELAY)) {
+            puts("incoming draw");
+            epd.suspend();
+            epd.clear(epd.bounds());
+            oti.text = data.line1;
+            oti.scale = oti.font->scale(epd.dimensions().height / 4);
+            srect16 txt_rect = oti.font->measure_text(ssize16::max(), oti.offset, oti.text, oti.scale, oti.scaled_tab_width, oti.encoding, oti.cache).bounds();
+            draw::text(epd, txt_rect.center((srect16)epd.bounds()).offset(0, 0 - txt_rect.dimensions().height / 2 - 1), oti, color_t::black);
+            oti.text = data.line2;
+            txt_rect = oti.font->measure_text(ssize16::max(), oti.offset, oti.text, oti.scale, oti.scaled_tab_width, oti.encoding, oti.cache).bounds();
+            draw::text(epd, txt_rect.center((srect16)epd.bounds()).offset(0, txt_rect.dimensions().height / 2 + 1), oti, color_t::black);
+            epd.resume();
+        }
+    }
+}
+void setup()
+{
+    Serial.begin(115200);
+    draw_queue = xQueueCreate(10,sizeof(time_data_t));
+    TaskHandle_t task_handle;
+
+    xTaskCreate(draw_task,"draw_task",4096,nullptr,1,&task_handle);
 }
 
 void loop()
@@ -170,8 +188,11 @@ void loop()
             time_now = (time_t)(time_server.request_result() + time_offset + latency_offset);
             puts("Clock set.");
             // set the digital clock - otherwise it only updates once a minute
-            update_time_buffer(time_now);
-            draw_time();
+            time_data_t data;
+            update_time_buffer(time_now,&data);
+            puts("outgoing post");
+            xQueueSend(draw_queue,&data,portMAX_DELAY);
+        
             connection_state = CS_IDLE;
             puts("Turning WiFi off.");
             wifi_man.disconnect(true);
@@ -190,9 +211,11 @@ void loop()
     static uint32_t loop_ts = millis();
     static time_t old_now = 0;
     if(old_now%300 != time_now%300) {
-        if (update_time_buffer(time_now))
+        time_data_t data;
+        if (update_time_buffer(time_now,&data))
         {
-            draw_time();
+            puts("outgoing post");
+            xQueueSend(draw_queue,&data,portMAX_DELAY);
         }
     }
     uint32_t end_time_ts = millis();
