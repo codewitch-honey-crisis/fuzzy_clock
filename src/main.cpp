@@ -69,7 +69,7 @@ static bool update_time_buffer(time_t now,time_data_t* out_data)
     {
         adj = 1;
     }
-    if (i == 0)
+    if ((i%12) == 0)
     {
         strcpy(out_data->line1, get_str(time_hours, hour % 24));
         if (hour == 11)
