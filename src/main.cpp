@@ -191,13 +191,11 @@ void loop()
     if (millis() >= tick_ts + 1000)
     {
         tick_ts = millis();
+
         ++time_now;
         if (update_time_buffer(time_now))
         {
-            static uint32_t adjust_ts = millis();
             draw_time();
-            uint32_t draw_ts = millis()-adjust_ts;
-            time_now += ((draw_ts+500)/1000);
         }
     }
     time_server.update();
